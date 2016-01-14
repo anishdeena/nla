@@ -4,7 +4,7 @@ package com.example.anish.testchat.other;
  * Created by anish on 31/10/15.
  */
 public class Message {
-    private String fromName, message;
+    private String fromName, message, payload;
     private boolean isSelf;
 
     public Message() {
@@ -14,6 +14,14 @@ public class Message {
         this.fromName = fromName;
         this.message = message;
         this.isSelf = isSelf;
+    }
+
+    public Message(String fromName, String message, boolean isSelf, String payload) {
+        this.fromName = fromName;
+        this.message = message;
+        this.isSelf = isSelf;
+        this.payload = payload;
+
     }
 
     public String getFromName() {
@@ -39,5 +47,7 @@ public class Message {
     public void setSelf(boolean isSelf) {
         this.isSelf = isSelf;
     }
+
+    public String getPayload() { return payload; }
 
 }
