@@ -9,5 +9,6 @@
     <string name="enter_name">Enter your name</string>
     <string name="btn_join">JOIN</string>
     <string name="btn_send">Send</string>
+    <string name="btn_action">Do</string>
     <string name="title_activity_name">NameActivity</string>
 </resources>

@@ -19,7 +19,7 @@ public class Utils {
     private static final String KEY_SHARED_PREF = "ANDROID_WEB_CHAT";
     private static final int KEY_MODE_PRIVATE = 0;
     private static final String KEY_SESSION_ID = "sessionId",
-            FLAG_MESSAGE = "message", OP_CALL = "call";
+            FLAG_MESSAGE = "message", OP_CALL = "call", OP_ADDCONTACT = "add", OP_SEARCH = "search";
 
     public Utils(Context context) {
         this.context = context;
@@ -48,6 +48,10 @@ public class Utils {
             Log.v("operation", words[0]);
             if(words[0].equalsIgnoreCase(OP_CALL))
                 jObj.put("operation", OP_CALL);
+            else if(words[0].equalsIgnoreCase(OP_ADDCONTACT))
+                jObj.put("operation", OP_ADDCONTACT);
+            else if(words[0].equalsIgnoreCase(OP_SEARCH))
+                jObj.put("operation", OP_SEARCH);
             String query = message.substring(op_length);
             query = query.trim();
             Log.v("query", query);

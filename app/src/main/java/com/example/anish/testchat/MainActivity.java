@@ -2,19 +2,26 @@ package com.example.anish.testchat;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.ProgressDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ContentProviderOperation;
 import android.content.Intent;
+import android.content.OperationApplicationException;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.RemoteException;
 import android.provider.ContactsContract;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.util.Log;
 import android.view.View;
 import android.widget.AdapterView;
@@ -31,6 +38,8 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
 
@@ -46,7 +55,7 @@ public class MainActivity extends Activity {
     // LogCat tag
     private static final String TAG = MainActivity.class.getSimpleName();
 
-    private Button btnSend;
+    private Button btnSend, btnAction;
     private EditText inputMsg;
 
     // Chat messages list adapter
@@ -61,14 +70,26 @@ public class MainActivity extends Activity {
 
     // JSON flags to identify the kind of JSON response
     private static final String TAG_SELF = "self", TAG_NEW = "new",
-            TAG_MESSAGE = "message", TAG_EXIT = "exit", OP_CALL = "call";
+            TAG_MESSAGE = "message", TAG_EXIT = "exit", OP_CALL = "call", OP_ADDCONTACT = "add", OP_SEARCH = "search";
+
+
+    //Contact add global variables. Must change
+    private String ctName;
+    private String ctNumber;
+
+    //App search variables
+    private PackageManager packageManager = null;
+    private List<ApplicationInfo> applist = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        getActionBar().hide();
 
         btnSend = (Button) findViewById(R.id.btnSend);
+        btnAction = (Button) findViewById(R.id.btnAction);
+
         inputMsg = (EditText) findViewById(R.id.inputMsg);
         listViewMessages = (ListView) findViewById(R.id.list_view_messages);
 
@@ -76,13 +97,13 @@ public class MainActivity extends Activity {
 
         // Getting the person name from previous screen
         Intent i = getIntent();
-        name = "MAHESH";//i.getStringExtra("name");
+        name = "Bajji";//i.getStringExtra("name");
 
         //Code to list installed apps and also get their intents
 
-        final PackageManager pm = getPackageManager();
+        packageManager = getPackageManager();
 
-        List<ApplicationInfo> packages = pm
+        /*List<ApplicationInfo> packages = packageManager
                 .getInstalledApplications(PackageManager.GET_META_DATA);
 
         for (ApplicationInfo packageInfo : packages) {
@@ -90,9 +111,15 @@ public class MainActivity extends Activity {
             Log.d(TAG, "Installed package :" + packageInfo.packageName);
             Log.d(TAG,
                     "Launch Activity :"
-                            + pm.getLaunchIntentForPackage(packageInfo.packageName));
+                            + packageManager.getLaunchIntentForPackage(packageInfo.packageName));
 
-        }
+        }*/
+
+        new LoadApplications().execute();
+
+
+
+        //Event listeners
 
         btnSend.setOnClickListener(new View.OnClickListener() {
 
@@ -107,10 +134,51 @@ public class MainActivity extends Activity {
             }
         });
 
+        btnAction.setOnClickListener(new View.OnClickListener() {
+
+            @Override
+            public void onClick(View v) {
+                // Sending message to web socket server
+                checkPermissionsAndWrite(ctName, ctNumber);
+
+                // Clearing the input filed once message was sent
+                inputMsg.setText("");
+            }
+        });
+
+        inputMsg.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence charSequence, int i, int i2, int i3) {
+
+            }
+
+            @Override
+            public void onTextChanged(CharSequence charSequence, int i, int i2, int i3) {
+
+                String[] words = inputMsg.getText().toString().split(" ");
+                if(words.length > 1 && words[1].length() >= 3) {
+                    // Sending message to web socket server
+                    sendMessageToProcessor(utils.convertToJSONString(inputMsg.getText()
+                            .toString()), name);
+
+                }
+
+            }
+
+            @Override
+            public void afterTextChanged(Editable edit) {
+                if (edit.length() != 0) {
+                    // Business logic for search here
+                }
+            }
+        });
+
         listMessages = new ArrayList<Message>();
 
         adapter = new MessagesListAdapter(this, listMessages);
         listViewMessages.setAdapter(adapter);
+
+        adapter.setPackageManager(packageManager);
 
         listViewMessages.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override
@@ -120,8 +188,26 @@ public class MainActivity extends Activity {
                 Log.v("payload", clickedItem.getPayload());
                 try {
                     JSONObject payloadJson = new JSONObject(clickedItem.getPayload());
+
+
                     if(payloadJson.getString("operation").equalsIgnoreCase(OP_CALL)) {
                         checkPermissionsAndCall(payloadJson.getString("phone"));
+                    }
+                    else if(payloadJson.getString("operation").equalsIgnoreCase(OP_SEARCH)) {
+                        try {
+                            JSONObject obj = new JSONObject(clickedItem.getPayload());
+                            String appPackageName = (String) obj.get("app_package_name");
+                            Intent intent = packageManager
+                                    .getLaunchIntentForPackage(appPackageName);
+
+                            if (null != intent) {
+                                startActivity(intent);
+                            }
+                        } catch (JSONException e) {
+                            e.printStackTrace();
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
                     }
                 }
                 catch (JSONException e) {
@@ -147,6 +233,7 @@ public class MainActivity extends Activity {
             jObj.put("name", username);
 
             String operation = jObj.getString("operation");
+            adapter.clearList();
 
             if (operation.equalsIgnoreCase(OP_CALL)) {
                 // It is a call operation
@@ -177,13 +264,41 @@ public class MainActivity extends Activity {
                     }
                 }
 
-
-
-
                 //Message m = new Message(fromName, message, isSelf);
                 //Log.v("logging", m.getFromName() + " $$ " + m.getMessage() + " $$ " + m.isSelf());
                 // Appending the message to chat list
                 //appendMessage(m);
+            }
+
+            if (operation.equalsIgnoreCase(OP_ADDCONTACT)) {
+                String fromName = jObj.getString("name");
+                String query = jObj.getString("query");
+                Pattern phoneNumberPattern = Pattern.compile("([\\+0-9-( )]+)$"); //[\+?]
+                Matcher matcher = phoneNumberPattern.matcher(query);
+                String phoneNumber = "";
+                String phoneName = "";
+                if(matcher.find()) {
+                    phoneNumber = matcher.group(0);
+                    Log.v("Phone extracted", matcher.group(0));
+                }
+                if(!phoneNumber.equalsIgnoreCase("")) {
+                    phoneName = query.replace(phoneNumber, "");
+                    phoneName = phoneName.trim();
+                }
+                Log.v("Extracted add info", phoneName + " --|-- " + phoneNumber);
+
+                ctName = phoneName;
+                ctNumber = phoneNumber;
+
+
+            }
+
+            if (operation.equalsIgnoreCase(OP_SEARCH)) {
+
+                String fromName = jObj.getString("name");
+                String query = jObj.getString("query");
+                Log.v("Entering search", "query");
+                adapter.filter(query);
             }
 
         } catch (JSONException e) {
@@ -382,11 +497,12 @@ public class MainActivity extends Activity {
                 }
                 return;
             }
-           /* case MY_PERMISSIONS_REQUEST_WRITE_CONTACTS:{
+            case MY_PERMISSIONS_REQUEST_WRITE_CONTACTS:{
 
                 if (grantResults.length > 0
                         && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    writeContact();
+                    //M case problem
+                    //writeContact();
                     Toast.makeText(getApplicationContext(), "Addcontact permitted", Toast.LENGTH_SHORT).show();
                     Log.e("Addcontact permitted", "Addcontact permitted");    //permission granted
                 } else {
@@ -400,7 +516,6 @@ public class MainActivity extends Activity {
                 return;
 
             }
-            */
         }
     }
 
@@ -444,5 +559,103 @@ public class MainActivity extends Activity {
         call(phone);
         return;
     }
+
+    //ADD CONTACT
+
+    private void writeContact(String phoneName, String phoneNumber) {
+        ArrayList contentProviderOperations = new ArrayList();
+        //insert raw contact using RawContacts.CONTENT_URI
+        contentProviderOperations.add(ContentProviderOperation.newInsert(ContactsContract.RawContacts.CONTENT_URI)
+                .withValue(ContactsContract.RawContacts.ACCOUNT_TYPE, null).withValue(ContactsContract.RawContacts.ACCOUNT_NAME, null).build());
+        //insert contact display name using Data.CONTENT_URI
+        contentProviderOperations.add(ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0).withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)
+                .withValue(ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, phoneName).build());
+        //insert mobile number using Data.CONTENT_URI
+        contentProviderOperations.add(ContentProviderOperation.newInsert(ContactsContract.Data.CONTENT_URI)
+                .withValueBackReference(ContactsContract.Data.RAW_CONTACT_ID, 0).withValue(ContactsContract.Data.MIMETYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)
+                .withValue(ContactsContract.CommonDataKinds.Phone.NUMBER, phoneNumber).withValue(ContactsContract.CommonDataKinds.Phone.TYPE, ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE).build());
+        try {
+            getApplicationContext().getContentResolver().
+                    applyBatch(ContactsContract.AUTHORITY, contentProviderOperations);
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        } catch (OperationApplicationException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    private void checkPermissionsAndWrite(String phoneName, String phoneNumber)
+    {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Toast.makeText(getApplicationContext(), "Version 23", Toast.LENGTH_SHORT).show();
+            if (ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.WRITE_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this,
+                        new String[]{Manifest.permission.WRITE_CONTACTS},MY_PERMISSIONS_REQUEST_WRITE_CONTACTS);
+                return;
+            }
+            else
+
+                Log.e("Contacts wr Permitted", "Contacts already Permitted");
+            Toast.makeText(getApplicationContext(), "Contacts already Permitted", Toast.LENGTH_SHORT).show();
+            writeContact(phoneName, phoneNumber);
+            return;
+        }
+        else
+            Toast.makeText(getApplicationContext(), "Lower Version", Toast.LENGTH_SHORT).show();
+        writeContact(phoneName, phoneNumber);
+        return;
+    }
+
+
+    //Data intensive operations like loading app data, etc
+    private List<ApplicationInfo> checkForLaunchIntent(List<ApplicationInfo> list) {
+        ArrayList<ApplicationInfo> applist = new ArrayList<ApplicationInfo>();
+        for (ApplicationInfo info : list) {
+            try {
+                if (null != packageManager.getLaunchIntentForPackage(info.packageName)) {
+                    applist.add(info);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+
+        return applist;
+    }
+
+    private class LoadApplications extends AsyncTask<Void, Void, Void> {
+        private ProgressDialog progress = null;
+
+        @Override
+        protected Void doInBackground(Void... params) {
+            applist = checkForLaunchIntent(packageManager.getInstalledApplications(PackageManager.GET_META_DATA));
+            adapter.setAppList(applist);
+            return null;
+        }
+
+        @Override
+        protected void onCancelled() {
+            super.onCancelled();
+        }
+
+        @Override
+        protected void onPostExecute(Void result) {
+            super.onPostExecute(result);
+        }
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+        }
+
+        @Override
+        protected void onProgressUpdate(Void... values) {
+            super.onProgressUpdate(values);
+        }
+    }
+
 
 }
